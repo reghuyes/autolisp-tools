@@ -2,17 +2,19 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import re
 import shutil
 import sys
+import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
-import fitz  # PyMuPDF
+import pymupdf
 import pandas as pd
 import pytesseract
 from PIL import Image
@@ -32,6 +34,7 @@ REQUIRED_COLUMNS = [
 
 OPTIONAL_COLUMNS = ["Folder Path", "Processed At", "Missing Fields"]
 ALL_COLUMNS = REQUIRED_COLUMNS + OPTIONAL_COLUMNS
+RUN_LOCK = threading.Lock()
 
 
 DEFAULT_PATTERNS = {
@@ -101,7 +104,7 @@ def normalize_date(value: Optional[str]) -> str:
 
 def extract_text_with_ocr_fallback(pdf_path: Path, language: str, min_text_length_for_no_ocr: int) -> str:
     chunks: List[str] = []
-    with fitz.open(pdf_path) as doc:
+    with pymupdf.open(pdf_path) as doc:
         for page in doc:
             text = page.get_text("text").strip()
             if len(text) >= min_text_length_for_no_ocr:
@@ -115,6 +118,10 @@ def extract_text_with_ocr_fallback(pdf_path: Path, language: str, min_text_lengt
             elif text:
                 chunks.append(text)
     return "\n".join(chunks).strip()
+
+
+def utc_now_iso() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def parse_fields(text: str, patterns: Dict[str, str]) -> Dict[str, str]:
@@ -134,25 +141,59 @@ def ensure_output_file(output_excel: Path) -> None:
     output_excel.parent.mkdir(parents=True, exist_ok=True)
     if not output_excel.exists():
         pd.DataFrame(columns=ALL_COLUMNS).to_excel(output_excel, index=False)
+        output_excel.chmod(0o600)
+
+
+def lock_file_path(target: Path) -> Path:
+    return target.with_suffix(target.suffix + ".lock")
+
+
+def with_file_lock(target: Path):
+    lock_path = lock_file_path(target)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_handle = lock_path.open("a+", encoding="utf-8")
+    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+    return lock_handle
 
 
 def load_existing_records(output_excel: Path) -> pd.DataFrame:
     ensure_output_file(output_excel)
-    df = pd.read_excel(output_excel)
+    try:
+        df = pd.read_excel(output_excel)
+    except Exception:
+        df = pd.DataFrame(columns=ALL_COLUMNS)
     for col in ALL_COLUMNS:
         if col not in df.columns:
             df[col] = ""
     return df[ALL_COLUMNS]
 
 
-def append_unique_row(output_excel: Path, row: Dict[str, str]) -> bool:
-    df = load_existing_records(output_excel)
-    folder_path = row["Folder Path"]
-    if (df["Folder Path"].fillna("") == folder_path).any():
-        return False
-    new_df = pd.concat([df, pd.DataFrame([row], columns=ALL_COLUMNS)], ignore_index=True)
-    new_df.to_excel(output_excel, index=False)
-    return True
+def append_unique_rows(output_excel: Path, rows: List[Dict[str, str]]) -> Set[str]:
+    if not rows:
+        return set()
+
+    lock_handle = with_file_lock(output_excel)
+    try:
+        df = load_existing_records(output_excel)
+        known_paths = set(df["Folder Path"].fillna("").astype(str))
+        unique_rows: List[Dict[str, str]] = []
+        for row in rows:
+            folder_path = str(row["Folder Path"])
+            if folder_path in known_paths:
+                continue
+            known_paths.add(folder_path)
+            unique_rows.append(row)
+
+        if not unique_rows:
+            return set()
+
+        new_df = pd.concat([df, pd.DataFrame(unique_rows, columns=ALL_COLUMNS)], ignore_index=True)
+        new_df.to_excel(output_excel, index=False)
+        output_excel.chmod(0o600)
+        return {str(row["Folder Path"]) for row in unique_rows}
+    finally:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+        lock_handle.close()
 
 
 def read_processed_folders(log_path: Path) -> Set[str]:
@@ -171,10 +212,16 @@ def read_processed_folders(log_path: Path) -> Set[str]:
     return processed
 
 
-def log_processing(log_path: Path, payload: Dict[str, str]) -> None:
+def log_processing(log_path: Path, payload: Dict[str, object]) -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    with log_path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    lock_handle = with_file_lock(log_path)
+    try:
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        log_path.chmod(0o600)
+    finally:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+        lock_handle.close()
 
 
 def enqueue_error(config: AgentConfig, folder: Path, reason: str) -> None:
@@ -186,10 +233,10 @@ def enqueue_error(config: AgentConfig, folder: Path, reason: str) -> None:
         shutil.copytree(folder, failed_folder)
 
 
-def process_case_folder(folder: Path, config: AgentConfig) -> Tuple[bool, bool, List[str], str]:
+def process_case_folder(folder: Path, config: AgentConfig) -> Tuple[bool, Optional[Dict[str, str]], List[str], str]:
     pdf_files = sorted(folder.rglob("*.pdf"))
     if not pdf_files:
-        return False, False, [], "No PDF files found"
+        return False, None, [], "No PDF files found"
 
     texts: List[str] = []
     for pdf_file in pdf_files:
@@ -202,7 +249,7 @@ def process_case_folder(folder: Path, config: AgentConfig) -> Tuple[bool, bool, 
             texts.append(text)
     merged_text = "\n".join(texts).strip()
     if not merged_text:
-        return False, False, [], "Could not extract text from PDFs"
+        return False, None, [], "Could not extract text from PDFs"
 
     extracted = parse_fields(merged_text, config.patterns)
     missing = [key for key in REQUIRED_COLUMNS[1:] if not extracted.get(key)]
@@ -216,75 +263,81 @@ def process_case_folder(folder: Path, config: AgentConfig) -> Tuple[bool, bool, 
         "Engineer Name": extracted["Engineer Name"],
         "Allocation Date": extracted["Allocation Date"],
         "Folder Path": str(folder.resolve()),
-        "Processed At": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "Processed At": utc_now_iso(),
         "Missing Fields": ", ".join(missing),
     }
-    added = append_unique_row(config.output_excel, row)
-    return True, added, missing, ""
+    return True, row, missing, ""
 
 
 def run_once(config: AgentConfig) -> Dict[str, int]:
-    config.input_root.mkdir(parents=True, exist_ok=True)
-    processed_set = read_processed_folders(config.processing_log)
-    summary = {
-        "processed": 0,
-        "rows_added": 0,
-        "skipped_already_processed": 0,
-        "failed": 0,
-        "with_missing_fields": 0,
-    }
+    with RUN_LOCK:
+        config.input_root.mkdir(parents=True, exist_ok=True)
+        processed_set = read_processed_folders(config.processing_log)
+        summary = {
+            "processed": 0,
+            "rows_added": 0,
+            "skipped_already_processed": 0,
+            "failed": 0,
+            "with_missing_fields": 0,
+        }
+        successful_logs: List[Dict[str, object]] = []
+        rows_to_append: List[Dict[str, str]] = []
 
-    for folder in sorted([p for p in config.input_root.iterdir() if p.is_dir()]):
-        folder_path = str(folder.resolve())
-        if folder_path in processed_set:
-            summary["skipped_already_processed"] += 1
-            continue
+        for folder in sorted([p for p in config.input_root.iterdir() if p.is_dir()]):
+            folder_path = str(folder.resolve())
+            if folder_path in processed_set:
+                summary["skipped_already_processed"] += 1
+                continue
 
-        try:
-            ok, added, missing, reason = process_case_folder(folder, config)
-            now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-            if ok:
-                summary["processed"] += 1
-                if added:
-                    summary["rows_added"] += 1
-                if missing:
-                    summary["with_missing_fields"] += 1
-                log_processing(
-                    config.processing_log,
-                    {
-                        "timestamp": now,
-                        "status": "processed",
-                        "folder_path": folder_path,
-                        "missing_fields": missing,
-                        "row_added": added,
-                    },
-                )
-            else:
+            try:
+                ok, row, missing, reason = process_case_folder(folder, config)
+                now = utc_now_iso()
+                if ok and row is not None:
+                    summary["processed"] += 1
+                    if missing:
+                        summary["with_missing_fields"] += 1
+                    successful_logs.append(
+                        {
+                            "timestamp": now,
+                            "status": "processed",
+                            "folder_path": folder_path,
+                            "missing_fields": missing,
+                        }
+                    )
+                    rows_to_append.append(row)
+                else:
+                    summary["failed"] += 1
+                    enqueue_error(config, folder, reason)
+                    log_processing(
+                        config.processing_log,
+                        {
+                            "timestamp": now,
+                            "status": "failed",
+                            "folder_path": folder_path,
+                            "reason": reason,
+                        },
+                    )
+            except Exception as exc:  # noqa: BLE001
                 summary["failed"] += 1
+                reason = str(exc)
                 enqueue_error(config, folder, reason)
                 log_processing(
                     config.processing_log,
                     {
-                        "timestamp": now,
+                        "timestamp": utc_now_iso(),
                         "status": "failed",
                         "folder_path": folder_path,
                         "reason": reason,
                     },
                 )
-        except Exception as exc:  # noqa: BLE001
-            summary["failed"] += 1
-            reason = str(exc)
-            enqueue_error(config, folder, reason)
-            log_processing(
-                config.processing_log,
-                {
-                    "timestamp": datetime.utcnow().isoformat(timespec="seconds") + "Z",
-                    "status": "failed",
-                    "folder_path": folder_path,
-                    "reason": reason,
-                },
-            )
-    return summary
+
+        inserted_paths = append_unique_rows(config.output_excel, rows_to_append)
+        summary["rows_added"] = len(inserted_paths)
+        for payload in successful_logs:
+            folder_path = str(payload["folder_path"])
+            payload["row_added"] = folder_path in inserted_paths
+            log_processing(config.processing_log, payload)
+        return summary
 
 
 class NewFolderHandler(FileSystemEventHandler):
@@ -296,7 +349,7 @@ class NewFolderHandler(FileSystemEventHandler):
         if event.is_directory:
             folder = Path(event.src_path)
             if folder.parent.resolve() == self.config.input_root.resolve():
-                run_once(self.config)
+                threading.Thread(target=run_once, args=(self.config,), daemon=True).start()
 
 
 def run_watch(config: AgentConfig) -> None:

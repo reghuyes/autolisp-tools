@@ -20,7 +20,7 @@ Additional audit columns are also written: `Folder Path`, `Processed At`, `Missi
 pip install -r requirements.txt
 ```
 
-Copy and edit `agent_config.json` values for your machine paths.
+Edit `agent_config.json` as needed (defaults are relative paths from the repository root).
 
 ## Run once (daily schedule/cron friendly)
 
@@ -41,3 +41,9 @@ python pdf_extraction_agent.py --config agent_config.json --watch
 - Flags missing required fields per folder row
 - Prevents duplicate row insertion by `Folder Path`
 - Copies failed folders to error queue and logs reason
+- Applies restricted file permissions (`600`) on output Excel and processing log
+
+## Security note
+
+This workflow writes `Password` values to Excel because that column is required.
+Store output in a secured location with restricted access.

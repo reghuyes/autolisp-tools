@@ -1,8 +1,8 @@
 {
-  "input_root": "/home/runner/work/autolisp-tools/autolisp-tools/input_cases",
-  "output_excel": "/home/runner/work/autolisp-tools/autolisp-tools/output/case_extraction.xlsx",
-  "processing_log": "/home/runner/work/autolisp-tools/autolisp-tools/output/processing.log.jsonl",
-  "error_queue_dir": "/home/runner/work/autolisp-tools/autolisp-tools/output/error_queue",
+  "input_root": "./input_cases",
+  "output_excel": "./output/case_extraction.xlsx",
+  "processing_log": "./output/processing.log.jsonl",
+  "error_queue_dir": "./output/error_queue",
   "ocr_language": "eng",
   "min_text_length_for_no_ocr": 40,
   "extraction_patterns": {
