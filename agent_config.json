@@ -1,0 +1,16 @@
+{
+  "input_root": "/home/runner/work/autolisp-tools/autolisp-tools/input_cases",
+  "output_excel": "/home/runner/work/autolisp-tools/autolisp-tools/output/case_extraction.xlsx",
+  "processing_log": "/home/runner/work/autolisp-tools/autolisp-tools/output/processing.log.jsonl",
+  "error_queue_dir": "/home/runner/work/autolisp-tools/autolisp-tools/output/error_queue",
+  "ocr_language": "eng",
+  "min_text_length_for_no_ocr": 40,
+  "extraction_patterns": {
+    "User Name": "(?im)^\\s*(?:user\\s*name|username)\\s*[:\\-]\\s*(.+?)\\s*$",
+    "Password": "(?im)^\\s*(?:password|pass)\\s*[:\\-]\\s*(.+?)\\s*$",
+    "Applicant Name": "(?im)^\\s*applicant\\s*name\\s*[:\\-]\\s*(.+?)\\s*$",
+    "Applicant Mobile Number": "(?im)^\\s*(?:applicant\\s*)?(?:mobile|phone|contact)\\s*(?:number|no\\.?)?\\s*[:\\-]\\s*([+\\d][\\d\\s\\-()]{7,})\\s*$",
+    "Engineer Name": "(?im)^\\s*engineer\\s*name\\s*[:\\-]\\s*(.+?)\\s*$",
+    "Allocation Date": "(?im)^\\s*(?:allocation|allotment)\\s*date\\s*[:\\-]\\s*([^\\n\\r]+?)\\s*$"
+  }
+}
