@@ -4,7 +4,9 @@
   "processing_log": "./output/processing.log.jsonl",
   "error_queue_dir": "./output/error_queue",
   "ocr_language": "eng",
+  "mask_password": false,
   "min_text_length_for_no_ocr": 40,
+  "watch_debounce_seconds": 1.0,
   "extraction_patterns": {
     "User Name": "(?im)^\\s*(?:user\\s*name|username)\\s*[:\\-]\\s*(.+?)\\s*$",
     "Password": "(?im)^\\s*(?:password|pass)\\s*[:\\-]\\s*(.+?)\\s*$",

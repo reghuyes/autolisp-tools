@@ -20,7 +20,10 @@ Additional audit columns are also written: `Folder Path`, `Processed At`, `Missi
 pip install -r requirements.txt
 ```
 
+Python 3.10+ is recommended.
+
 Edit `agent_config.json` as needed (defaults are relative paths from the repository root).
+`watch_debounce_seconds` controls how long watch mode waits to coalesce burst folder events.
 
 ## Run once (daily schedule/cron friendly)
 
@@ -41,9 +44,10 @@ python pdf_extraction_agent.py --config agent_config.json --watch
 - Flags missing required fields per folder row
 - Prevents duplicate row insertion by `Folder Path`
 - Copies failed folders to error queue and logs reason
-- Applies restricted file permissions (`600`) on output Excel and processing log
+- Applies restricted file permissions (`600`) on output Excel and processing log on POSIX systems
 
 ## Security note
 
-This workflow writes `Password` values to Excel because that column is required.
+By default this workflow writes `Password` values to Excel because that column is required.
+Set `"mask_password": true` in `agent_config.json` to store masked values instead.
 Store output in a secured location with restricted access.

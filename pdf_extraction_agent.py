@@ -2,21 +2,25 @@
 from __future__ import annotations
 
 import argparse
-import fcntl
 import json
+import os
+import queue
 import re
 import shutil
 import sys
 import threading
 import time
+import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, Iterator, List, Optional, Set, Tuple
 
 import pymupdf
 import pandas as pd
 import pytesseract
+from filelock import FileLock
 from PIL import Image
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
@@ -35,6 +39,7 @@ REQUIRED_COLUMNS = [
 OPTIONAL_COLUMNS = ["Folder Path", "Processed At", "Missing Fields"]
 ALL_COLUMNS = REQUIRED_COLUMNS + OPTIONAL_COLUMNS
 RUN_LOCK = threading.Lock()
+WATCH_DEBOUNCE_SECONDS = 1.0
 
 
 DEFAULT_PATTERNS = {
@@ -55,7 +60,9 @@ class AgentConfig:
     error_queue_dir: Path
     patterns: Dict[str, str]
     ocr_language: str = "eng"
+    mask_password: bool = False
     min_text_length_for_no_ocr: int = 40
+    watch_debounce_seconds: float = WATCH_DEBOUNCE_SECONDS
 
     @staticmethod
     def from_file(config_path: Path) -> "AgentConfig":
@@ -69,7 +76,9 @@ class AgentConfig:
             error_queue_dir=Path(raw["error_queue_dir"]).expanduser().resolve(),
             patterns=patterns,
             ocr_language=raw.get("ocr_language", "eng"),
+            mask_password=bool(raw.get("mask_password", False)),
             min_text_length_for_no_ocr=int(raw.get("min_text_length_for_no_ocr", 40)),
+            watch_debounce_seconds=float(raw.get("watch_debounce_seconds", WATCH_DEBOUNCE_SECONDS)),
         )
 
 
@@ -102,7 +111,14 @@ def normalize_date(value: Optional[str]) -> str:
     return value
 
 
+def mask_secret(value: str) -> str:
+    if not value:
+        return ""
+    return "[REDACTED]"
+
+
 def extract_text_with_ocr_fallback(pdf_path: Path, language: str, min_text_length_for_no_ocr: int) -> str:
+    """Extract page text and use OCR on pages with too little direct text content."""
     chunks: List[str] = []
     with pymupdf.open(pdf_path) as doc:
         for page in doc:
@@ -141,19 +157,27 @@ def ensure_output_file(output_excel: Path) -> None:
     output_excel.parent.mkdir(parents=True, exist_ok=True)
     if not output_excel.exists():
         pd.DataFrame(columns=ALL_COLUMNS).to_excel(output_excel, index=False)
-        output_excel.chmod(0o600)
+        secure_permissions(output_excel)
+
+
+def secure_permissions(path: Path) -> None:
+    if os.name != "nt":
+        path.chmod(0o600)
 
 
 def lock_file_path(target: Path) -> Path:
     return target.with_suffix(target.suffix + ".lock")
 
 
-def with_file_lock(target: Path):
+@contextmanager
+def with_file_lock(target: Path) -> Iterator[None]:
     lock_path = lock_file_path(target)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    lock_handle = lock_path.open("a+", encoding="utf-8")
-    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
-    return lock_handle
+    lock_path.touch(exist_ok=True)
+    secure_permissions(lock_path)
+    lock = FileLock(str(lock_path))
+    with lock:
+        yield
 
 
 def load_existing_records(output_excel: Path) -> pd.DataFrame:
@@ -172,8 +196,7 @@ def append_unique_rows(output_excel: Path, rows: List[Dict[str, str]]) -> Set[st
     if not rows:
         return set()
 
-    lock_handle = with_file_lock(output_excel)
-    try:
+    with with_file_lock(output_excel):
         df = load_existing_records(output_excel)
         known_paths = set(df["Folder Path"].fillna("").astype(str))
         unique_rows: List[Dict[str, str]] = []
@@ -189,11 +212,8 @@ def append_unique_rows(output_excel: Path, rows: List[Dict[str, str]]) -> Set[st
 
         new_df = pd.concat([df, pd.DataFrame(unique_rows, columns=ALL_COLUMNS)], ignore_index=True)
         new_df.to_excel(output_excel, index=False)
-        output_excel.chmod(0o600)
+        secure_permissions(output_excel)
         return {str(row["Folder Path"]) for row in unique_rows}
-    finally:
-        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
-        lock_handle.close()
 
 
 def read_processed_folders(log_path: Path) -> Set[str]:
@@ -214,23 +234,22 @@ def read_processed_folders(log_path: Path) -> Set[str]:
 
 def log_processing(log_path: Path, payload: Dict[str, object]) -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    lock_handle = with_file_lock(log_path)
-    try:
+    with with_file_lock(log_path):
         with log_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(payload, ensure_ascii=False) + "\n")
-        log_path.chmod(0o600)
-    finally:
-        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
-        lock_handle.close()
+        secure_permissions(log_path)
 
 
 def enqueue_error(config: AgentConfig, folder: Path, reason: str) -> None:
     config.error_queue_dir.mkdir(parents=True, exist_ok=True)
-    marker = config.error_queue_dir / f"{folder.name}_{int(time.time())}.txt"
+    marker = config.error_queue_dir / f"{folder.name}_{time.time_ns()}_{uuid.uuid4().hex[:8]}.txt"
     marker.write_text(f"folder={folder}\nreason={reason}\n", encoding="utf-8")
-    failed_folder = config.error_queue_dir / folder.name
-    if not failed_folder.exists():
+    failed_folder = config.error_queue_dir / f"{folder.name}_{uuid.uuid4().hex[:8]}"
+    try:
         shutil.copytree(folder, failed_folder)
+    except OSError as exc:
+        with marker.open("a", encoding="utf-8") as f:
+            f.write(f"copy_error={exc}\n")
 
 
 def process_case_folder(folder: Path, config: AgentConfig) -> Tuple[bool, Optional[Dict[str, str]], List[str], str]:
@@ -252,20 +271,22 @@ def process_case_folder(folder: Path, config: AgentConfig) -> Tuple[bool, Option
         return False, None, [], "Could not extract text from PDFs"
 
     extracted = parse_fields(merged_text, config.patterns)
-    missing = [key for key in REQUIRED_COLUMNS[1:] if not extracted.get(key)]
+    password_value = mask_secret(extracted["Password"]) if config.mask_password else extracted["Password"]
 
     row = {
         "Folder No": folder.name,
         "User Name": extracted["User Name"],
-        "Password": extracted["Password"],
+        "Password": password_value,
         "Applicant Name": extracted["Applicant Name"],
         "Applicant Mobile Number": extracted["Applicant Mobile Number"],
         "Engineer Name": extracted["Engineer Name"],
         "Allocation Date": extracted["Allocation Date"],
         "Folder Path": str(folder.resolve()),
         "Processed At": utc_now_iso(),
-        "Missing Fields": ", ".join(missing),
+        "Missing Fields": "",
     }
+    missing = [key for key in REQUIRED_COLUMNS if key != "Folder No" and not row.get(key)]
+    row["Missing Fields"] = ", ".join(missing)
     return True, row, missing, ""
 
 
@@ -331,7 +352,31 @@ def run_once(config: AgentConfig) -> Dict[str, int]:
                     },
                 )
 
-        inserted_paths = append_unique_rows(config.output_excel, rows_to_append)
+        inserted_paths: Set[str] = set()
+        try:
+            inserted_paths = append_unique_rows(config.output_excel, rows_to_append)
+        except Exception as exc:  # noqa: BLE001
+            summary["failed"] += len(successful_logs)
+            summary["processed"] = max(0, summary["processed"] - len(successful_logs))
+            missing_in_batch = sum(1 for payload in successful_logs if payload.get("missing_fields"))
+            summary["with_missing_fields"] = max(0, summary["with_missing_fields"] - missing_in_batch)
+            for payload in successful_logs:
+                enqueue_error(
+                    config,
+                    Path(str(payload["folder_path"])),
+                    f"excel_write_failed: {exc}",
+                )
+                log_processing(
+                    config.processing_log,
+                    {
+                        "timestamp": utc_now_iso(),
+                        "status": "failed_write",
+                        "folder_path": payload["folder_path"],
+                        "reason": str(exc),
+                    },
+                )
+            return summary
+
         summary["rows_added"] = len(inserted_paths)
         for payload in successful_logs:
             folder_path = str(payload["folder_path"])
@@ -341,26 +386,43 @@ def run_once(config: AgentConfig) -> Dict[str, int]:
 
 
 class NewFolderHandler(FileSystemEventHandler):
-    def __init__(self, config: AgentConfig) -> None:
+    def __init__(self, config: AgentConfig, trigger_queue: queue.Queue) -> None:
         super().__init__()
         self.config = config
+        self.trigger_queue = trigger_queue
 
     def on_created(self, event) -> None:  # type: ignore[override]
         if event.is_directory:
             folder = Path(event.src_path)
             if folder.parent.resolve() == self.config.input_root.resolve():
-                threading.Thread(target=run_once, args=(self.config,), daemon=True).start()
+                self.trigger_queue.put(1)
 
 
 def run_watch(config: AgentConfig) -> None:
     run_once(config)
+    trigger_queue: queue.Queue = queue.Queue()
     observer = Observer()
-    observer.schedule(NewFolderHandler(config), str(config.input_root), recursive=False)
+    observer.schedule(NewFolderHandler(config, trigger_queue), str(config.input_root), recursive=False)
     observer.start()
     print(f"Watching: {config.input_root}")
     try:
         while True:
-            time.sleep(1)
+            try:
+                trigger_queue.get(timeout=1)
+            except queue.Empty:
+                continue
+
+            time.sleep(config.watch_debounce_seconds)
+            try:
+                while True:
+                    trigger_queue.get_nowait()
+            except queue.Empty:
+                pass
+
+            try:
+                run_once(config)
+            except Exception as exc:  # noqa: BLE001
+                print(f"watch-run error: {exc}", file=sys.stderr)
     except KeyboardInterrupt:
         observer.stop()
     observer.join()

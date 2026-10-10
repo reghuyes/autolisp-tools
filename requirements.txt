@@ -4,3 +4,4 @@ PyMuPDF
 pytesseract
 Pillow
 watchdog
+filelock
