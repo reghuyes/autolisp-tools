@@ -1,8 +1,8 @@
 {
-  "input_root": "./input_cases",
-  "output_excel": "./output/case_extraction.xlsx",
-  "processing_log": "./output/processing.log.jsonl",
-  "error_queue_dir": "./output/error_queue",
+  "input_root": "F:\\plan approval online 2026",
+  "output_excel": "J:\\My Drive\\pdfautomation\\case_extraction.xlsx",
+  "processing_log": "J:\\My Drive\\pdfautomation\\processing.log.jsonl",
+  "error_queue_dir": "J:\\My Drive\\pdfautomation\\error_queue",
   "ocr_language": "eng",
   "mask_password": false,
   "min_text_length_for_no_ocr": 40,

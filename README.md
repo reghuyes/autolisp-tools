@@ -22,7 +22,7 @@ pip install -r requirements.txt
 
 Python 3.10+ is recommended.
 
-Edit `agent_config.json` as needed (defaults are relative paths from the repository root).
+Edit `agent_config.json` as needed for your environment (Windows absolute paths are supported).
 `watch_debounce_seconds` controls how long watch mode waits to coalesce burst folder events.
 
 ## Run once (daily schedule/cron friendly)
@@ -51,3 +51,4 @@ python pdf_extraction_agent.py --config agent_config.json --watch
 By default this workflow writes `Password` values to Excel because that column is required.
 Set `"mask_password": true` in `agent_config.json` to store masked values instead.
 Store output in a secured location with restricted access.
+On Windows, POSIX `600` permissions are not applied by the script; use NTFS/Drive sharing controls to restrict access.
