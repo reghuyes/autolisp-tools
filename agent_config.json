@@ -1,0 +1,18 @@
+{
+  "input_root": "F:\\plan approval online 2026",
+  "output_excel": "J:\\My Drive\\pdfautomation\\case_extraction.xlsx",
+  "processing_log": "J:\\My Drive\\pdfautomation\\processing.log.jsonl",
+  "error_queue_dir": "J:\\My Drive\\pdfautomation\\error_queue",
+  "ocr_language": "eng",
+  "mask_password": false,
+  "min_text_length_for_no_ocr": 40,
+  "watch_debounce_seconds": 1.0,
+  "extraction_patterns": {
+    "User Name": "(?im)^\\s*(?:user\\s*name|username)\\s*[:\\-]\\s*(.+?)\\s*$",
+    "Password": "(?im)^\\s*(?:password|pass)\\s*[:\\-]\\s*(.+?)\\s*$",
+    "Applicant Name": "(?im)^\\s*applicant\\s*name\\s*[:\\-]\\s*(.+?)\\s*$",
+    "Applicant Mobile Number": "(?im)^\\s*(?:applicant\\s*)?(?:mobile|phone|contact)\\s*(?:number|no\\.?)?\\s*[:\\-]\\s*([+\\d][\\d\\s\\-()]{7,})\\s*$",
+    "Engineer Name": "(?im)^\\s*engineer\\s*name\\s*[:\\-]\\s*(.+?)\\s*$",
+    "Allocation Date": "(?im)^\\s*(?:allocation|allotment)\\s*date\\s*[:\\-]\\s*([^\\n\\r]+?)\\s*$"
+  }
+}
