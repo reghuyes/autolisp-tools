@@ -1,0 +1,74 @@
+{
+  "wall_centerlines": [
+    {
+      "x1": 0.0,
+      "y1": 0.0,
+      "x2": 5000.0,
+      "y2": 0.0,
+      "layer": "WALL_EXT",
+      "thickness": 250.0,
+      "height": 3300.0,
+      "wall_type": "Exterior"
+    },
+    {
+      "x1": 5000.0,
+      "y1": 0.0,
+      "x2": 5000.0,
+      "y2": 3500.0,
+      "layer": "WALL_EXT",
+      "thickness": 250.0,
+      "height": 3300.0,
+      "wall_type": "Exterior"
+    },
+    {
+      "x1": 5000.0,
+      "y1": 3500.0,
+      "x2": 0.0,
+      "y2": 3500.0,
+      "layer": "WALL_EXT",
+      "thickness": 250.0,
+      "height": 3300.0,
+      "wall_type": "Exterior"
+    },
+    {
+      "x1": 0.0,
+      "y1": 3500.0,
+      "x2": 0.0,
+      "y2": 0.0,
+      "layer": "WALL_EXT",
+      "thickness": 250.0,
+      "height": 3300.0,
+      "wall_type": "Exterior"
+    },
+    {
+      "x1": 2500.0,
+      "y1": 0.0,
+      "x2": 2500.0,
+      "y2": 3500.0,
+      "layer": "WALL_INT",
+      "thickness": 150.0,
+      "height": 3000.0,
+      "wall_type": "Interior"
+    }
+  ],
+  "loop_candidates": [
+    [
+      [
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        3500.0
+      ],
+      [
+        5000.0,
+        3500.0
+      ],
+      [
+        5000.0,
+        0.0
+      ]
+    ]
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "units": "mm",
+  "scale_factor": 1.0,
+  "default_wall": {
+    "thickness": 200.0,
+    "height": 3000.0,
+    "type": "Generic"
+  },
+  "layer_rules": {
+    "WALL_EXT": {
+      "thickness": 250.0,
+      "height": 3300.0,
+      "type": "Exterior"
+    },
+    "WALL_INT": {
+      "thickness": 150.0,
+      "height": 3000.0,
+      "type": "Interior"
+    },
+    "WALL_CORE": {
+      "thickness": 200.0,
+      "height": 3000.0,
+      "type": "Core"
+    }
+  },
+  "geometry": {
+    "min_segment_length": 250.0,
+    "snap_tolerance": 15.0,
+    "collinear_angle_tolerance_deg": 3.0,
+    "join_tolerance": 20.0
+  },
+  "openings": {
+    "door_gap_min": 800.0,
+    "window_gap_min": 500.0
+  }
+}

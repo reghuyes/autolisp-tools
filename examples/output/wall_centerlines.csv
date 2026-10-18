@@ -1,0 +1,6 @@
+x1,y1,x2,y2,layer,thickness,height,wall_type
+0.0,0.0,5000.0,0.0,WALL_EXT,250.0,3300.0,Exterior
+5000.0,0.0,5000.0,3500.0,WALL_EXT,250.0,3300.0,Exterior
+5000.0,3500.0,0.0,3500.0,WALL_EXT,250.0,3300.0,Exterior
+0.0,3500.0,0.0,0.0,WALL_EXT,250.0,3300.0,Exterior
+2500.0,0.0,2500.0,3500.0,WALL_INT,150.0,3000.0,Interior
