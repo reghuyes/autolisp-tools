@@ -40,6 +40,24 @@ class WallRule:
 
 
 @dataclass
+class ImageConfig:
+    enable_deskew: bool
+    gaussian_blur_ksize: int
+    adaptive_threshold: bool
+    adaptive_block_size: int
+    adaptive_c: float
+    morphology_kernel: int
+    morphology_iterations: int
+    canny_threshold_1: int
+    canny_threshold_2: int
+    hough_threshold: int
+    hough_min_line_length_px: int
+    hough_max_line_gap_px: int
+    lsd_enabled: bool
+    lsd_scale: float
+
+
+@dataclass
 class PipelineConfig:
     units: str
     scale_factor: float
@@ -51,6 +69,7 @@ class PipelineConfig:
     layer_wall_rules: Dict[str, WallRule]
     door_gap_min: float
     window_gap_min: float
+    image: ImageConfig
 
 
 class PipelineError(Exception):
@@ -62,6 +81,25 @@ def _float(value: object, name: str) -> float:
         return float(value)
     except (TypeError, ValueError) as exc:
         raise PipelineError(f"Invalid numeric value for '{name}': {value!r}") from exc
+
+
+def _int(value: object, name: str) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise PipelineError(f"Invalid integer value for '{name}': {value!r}") from exc
+
+
+def _bool(value: object, name: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "y", "on"}:
+            return True
+        if lowered in {"false", "0", "no", "n", "off"}:
+            return False
+    raise PipelineError(f"Invalid boolean value for '{name}': {value!r}")
 
 
 def load_config(config_path: Path) -> PipelineConfig:
@@ -81,6 +119,21 @@ def load_config(config_path: Path) -> PipelineConfig:
             wall_type=str(rule.get("type", default_rule.wall_type)),
         )
 
+    image = data.get("image", {})
+    adaptive_block_size = _int(image.get("adaptive_block_size", 31), "image.adaptive_block_size")
+    if adaptive_block_size < 3:
+        adaptive_block_size = 3
+    if adaptive_block_size % 2 == 0:
+        adaptive_block_size += 1
+
+    gaussian_blur_ksize = _int(image.get("gaussian_blur_ksize", 5), "image.gaussian_blur_ksize")
+    if gaussian_blur_ksize < 1:
+        gaussian_blur_ksize = 1
+    if gaussian_blur_ksize % 2 == 0:
+        gaussian_blur_ksize += 1
+
+    morphology_kernel = max(1, _int(image.get("morphology_kernel", 3), "image.morphology_kernel"))
+
     return PipelineConfig(
         units=str(data.get("units", "mm")),
         scale_factor=_float(data.get("scale_factor", 1.0), "scale_factor"),
@@ -95,6 +148,22 @@ def load_config(config_path: Path) -> PipelineConfig:
         layer_wall_rules=layer_rules,
         door_gap_min=_float(data.get("openings", {}).get("door_gap_min", 800.0), "openings.door_gap_min"),
         window_gap_min=_float(data.get("openings", {}).get("window_gap_min", 500.0), "openings.window_gap_min"),
+        image=ImageConfig(
+            enable_deskew=_bool(image.get("enable_deskew", True), "image.enable_deskew"),
+            gaussian_blur_ksize=gaussian_blur_ksize,
+            adaptive_threshold=_bool(image.get("adaptive_threshold", True), "image.adaptive_threshold"),
+            adaptive_block_size=adaptive_block_size,
+            adaptive_c=_float(image.get("adaptive_c", 2.0), "image.adaptive_c"),
+            morphology_kernel=morphology_kernel,
+            morphology_iterations=max(0, _int(image.get("morphology_iterations", 1), "image.morphology_iterations")),
+            canny_threshold_1=max(0, _int(image.get("canny_threshold_1", 50), "image.canny_threshold_1")),
+            canny_threshold_2=max(1, _int(image.get("canny_threshold_2", 150), "image.canny_threshold_2")),
+            hough_threshold=max(1, _int(image.get("hough_threshold", 35), "image.hough_threshold")),
+            hough_min_line_length_px=max(5, _int(image.get("hough_min_line_length_px", 30), "image.hough_min_line_length_px")),
+            hough_max_line_gap_px=max(1, _int(image.get("hough_max_line_gap_px", 12), "image.hough_max_line_gap_px")),
+            lsd_enabled=_bool(image.get("lsd_enabled", True), "image.lsd_enabled"),
+            lsd_scale=max(0.1, _float(image.get("lsd_scale", 0.8), "image.lsd_scale")),
+        ),
     )
 
 
@@ -155,6 +224,145 @@ def _load_csv_segments(input_path: Path, config: PipelineConfig) -> List[Segment
     return segments
 
 
+def _deskew_image(image: "np.ndarray", cv2: object) -> "np.ndarray":
+    coords = cv2.findNonZero(image)
+    if coords is None:
+        return image
+    rect = cv2.minAreaRect(coords)
+    angle = rect[2]
+    if angle < -45:
+        angle = 90 + angle
+    if abs(angle) < 0.1:
+        return image
+    h, w = image.shape[:2]
+    center = (w / 2.0, h / 2.0)
+    matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
+    return cv2.warpAffine(image, matrix, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+
+
+def _preprocess_image(image: "np.ndarray", config: PipelineConfig, cv2: object) -> "np.ndarray":
+    work = cv2.fastNlMeansDenoising(image, None, 12, 7, 21)
+    work = cv2.GaussianBlur(work, (config.image.gaussian_blur_ksize, config.image.gaussian_blur_ksize), 0)
+
+    if config.image.adaptive_threshold:
+        threshold = cv2.adaptiveThreshold(
+            work,
+            255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV,
+            config.image.adaptive_block_size,
+            config.image.adaptive_c,
+        )
+    else:
+        _, threshold = cv2.threshold(work, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_RECT,
+        (config.image.morphology_kernel, config.image.morphology_kernel),
+    )
+    if config.image.morphology_iterations > 0:
+        threshold = cv2.morphologyEx(
+            threshold,
+            cv2.MORPH_CLOSE,
+            kernel,
+            iterations=config.image.morphology_iterations,
+        )
+        threshold = cv2.morphologyEx(
+            threshold,
+            cv2.MORPH_OPEN,
+            kernel,
+            iterations=1,
+        )
+
+    if config.image.enable_deskew:
+        threshold = _deskew_image(threshold, cv2)
+    return threshold
+
+
+def _extract_hough_segments(threshold: "np.ndarray", config: PipelineConfig, cv2: object, np: object) -> List[Tuple[int, int, int, int]]:
+    edges = cv2.Canny(
+        threshold,
+        config.image.canny_threshold_1,
+        config.image.canny_threshold_2,
+        apertureSize=3,
+    )
+    min_length_scale = max(config.scale_factor, 1e-9)
+    base_min_len = max(
+        config.image.hough_min_line_length_px,
+        int(config.min_segment_length / min_length_scale),
+    )
+    base_max_gap = max(
+        config.image.hough_max_line_gap_px,
+        int(config.join_tolerance / min_length_scale),
+    )
+    params = [
+        (config.image.hough_threshold, base_min_len, base_max_gap),
+        (max(10, int(config.image.hough_threshold * 0.75)), max(10, int(base_min_len * 0.6)), max(3, int(base_max_gap * 1.5))),
+    ]
+    found: List[Tuple[int, int, int, int]] = []
+    for threshold_value, min_len, max_gap in params:
+        lines = cv2.HoughLinesP(
+            edges,
+            rho=1,
+            theta=np.pi / 180,
+            threshold=threshold_value,
+            minLineLength=min_len,
+            maxLineGap=max_gap,
+        )
+        if lines is None:
+            continue
+        for line in lines[:, 0]:
+            found.append(tuple(int(v) for v in line.tolist()))
+    return found
+
+
+def _extract_lsd_segments(threshold: "np.ndarray", config: PipelineConfig, cv2: object) -> List[Tuple[int, int, int, int]]:
+    if not config.image.lsd_enabled:
+        return []
+    if not hasattr(cv2, "createLineSegmentDetector"):
+        return []
+    detector = cv2.createLineSegmentDetector(scale=config.image.lsd_scale)
+    detected = detector.detect(threshold)[0]
+    if detected is None:
+        return []
+    lines: List[Tuple[int, int, int, int]] = []
+    for segment in detected[:, 0]:
+        x1, y1, x2, y2 = segment.tolist()
+        lines.append((int(round(x1)), int(round(y1)), int(round(x2)), int(round(y2))))
+    return lines
+
+
+def _normalize_line(line: Tuple[int, int, int, int]) -> Tuple[int, int, int, int]:
+    x1, y1, x2, y2 = line
+    if (x1, y1) <= (x2, y2):
+        return line
+    return (x2, y2, x1, y1)
+
+
+def _deduplicate_raw_lines(
+    raw_lines: Iterable[Tuple[int, int, int, int]], config: PipelineConfig
+) -> List[Tuple[int, int, int, int]]:
+    tolerance_px = max(2, int(config.snap_tolerance / max(config.scale_factor, 1e-9)))
+    buckets: Dict[Tuple[int, int, int, int], Tuple[int, int, int, int]] = {}
+    for raw in raw_lines:
+        normalized = _normalize_line(raw)
+        key = (
+            round(normalized[0] / tolerance_px),
+            round(normalized[1] / tolerance_px),
+            round(normalized[2] / tolerance_px),
+            round(normalized[3] / tolerance_px),
+        )
+        current = buckets.get(key)
+        if current is None:
+            buckets[key] = normalized
+            continue
+        current_length = math.dist((current[0], current[1]), (current[2], current[3]))
+        new_length = math.dist((normalized[0], normalized[1]), (normalized[2], normalized[3]))
+        if new_length > current_length:
+            buckets[key] = normalized
+    return list(buckets.values())
+
+
 def _load_image_segments(input_path: Path, config: PipelineConfig) -> List[Segment]:
     try:
         import cv2  # type: ignore
@@ -168,23 +376,15 @@ def _load_image_segments(input_path: Path, config: PipelineConfig) -> List[Segme
     if image is None:
         raise PipelineError(f"Could not load image input: {input_path}")
 
-    blur = cv2.GaussianBlur(image, (3, 3), 0)
-    _, threshold = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-    lines = cv2.HoughLinesP(
-        threshold,
-        rho=1,
-        theta=np.pi / 180,
-        threshold=60,
-        minLineLength=max(int(config.min_segment_length / max(config.scale_factor, 1e-9)), 10),
-        maxLineGap=max(int(config.join_tolerance / max(config.scale_factor, 1e-9)), 5),
-    )
-
-    if lines is None:
+    threshold = _preprocess_image(image, config, cv2)
+    hough_lines = _extract_hough_segments(threshold, config, cv2, np)
+    lsd_lines = _extract_lsd_segments(threshold, config, cv2)
+    merged_lines = _deduplicate_raw_lines([*hough_lines, *lsd_lines], config)
+    if not merged_lines:
         return []
 
     segments: List[Segment] = []
-    for line in lines[:, 0]:
-        x1, y1, x2, y2 = line.tolist()
+    for x1, y1, x2, y2 in merged_lines:
         segments.append(
             Segment(
                 start=Point(x1 * config.scale_factor, y1 * config.scale_factor),

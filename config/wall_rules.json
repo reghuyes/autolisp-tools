@@ -29,6 +29,22 @@
     "collinear_angle_tolerance_deg": 3.0,
     "join_tolerance": 20.0
   },
+  "image": {
+    "enable_deskew": true,
+    "gaussian_blur_ksize": 5,
+    "adaptive_threshold": true,
+    "adaptive_block_size": 31,
+    "adaptive_c": 2.0,
+    "morphology_kernel": 3,
+    "morphology_iterations": 1,
+    "canny_threshold_1": 50,
+    "canny_threshold_2": 150,
+    "hough_threshold": 35,
+    "hough_min_line_length_px": 30,
+    "hough_max_line_gap_px": 12,
+    "lsd_enabled": true,
+    "lsd_scale": 0.8
+  },
   "openings": {
     "door_gap_min": 800.0,
     "window_gap_min": 500.0

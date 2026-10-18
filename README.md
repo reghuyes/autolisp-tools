@@ -8,8 +8,8 @@ This repository contains a baseline workflow for converting hand-drawn line sket
   - Vector line input: `JSON` and `CSV`
   - Raster sketch input: `PNG/JPG/TIFF/BMP/PDF` (requires optional `opencv-python` + `numpy`)
 - **Python preprocessing pipeline**
-  - Image preprocessing (grayscale, threshold, denoise)
-  - Line detection from raster sketches (Hough transform)
+  - Image preprocessing (denoise, adaptive/OTSU threshold, morphology, deskew)
+  - Stronger line detection from raster sketches (multi-pass Hough + LSD merge)
   - Geometry cleanup:
     - minimum segment filtering
     - endpoint snapping
@@ -45,7 +45,16 @@ Edit `/home/runner/work/autolisp-tools/autolisp-tools/config/wall_rules.json`:
 - `default_wall`: default wall thickness/height/type
 - `layer_rules`: per-layer wall overrides
 - `geometry`: cleanup and merge tolerances
+- `image`: deskew and raster vectorization tuning
 - `openings`: door/window minimum gap thresholds for downstream rules
+
+Image tuning keys include:
+- `enable_deskew`
+- `adaptive_threshold`, `adaptive_block_size`, `adaptive_c`
+- `morphology_kernel`, `morphology_iterations`
+- `canny_threshold_1`, `canny_threshold_2`
+- `hough_threshold`, `hough_min_line_length_px`, `hough_max_line_gap_px`
+- `lsd_enabled`, `lsd_scale`
 
 ## Run the converter
 
