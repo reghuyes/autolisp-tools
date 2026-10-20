@@ -1,6 +1,8 @@
 ;;; AutoLISP import command for wall_centerlines.csv output.
 ;;; Command: SKETCH2AEC
 
+(setq *s2a-run-cleanup* nil) ; set to T to run post-import PEDIT join
+
 (defun s2a-trim (s)
   (vl-string-trim " \t\r\n" s)
 )
@@ -98,7 +100,9 @@
         )
       )
       (close f)
-      (command "_.PEDIT" "_M" "_L" "" "_J" "" "" "")
+      (if (and *s2a-run-cleanup* (> count 0))
+        (vl-catch-all-apply 'command (list "_.PEDIT" "_M" "_L" "" "_J" "" "" ""))
+      )
       (prompt (strcat "\nImported wall segments: " (itoa count)))
     )
   )
