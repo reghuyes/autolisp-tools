@@ -311,12 +311,14 @@ def _extract_hough_segments(threshold: "np.ndarray", config: PipelineConfig, cv2
         )
         if lines is None:
             continue
-        for line in lines[:, 0]:
-            found.append(tuple(int(v) for v in line.tolist()))
+        normalized_lines = np.asarray(lines).reshape(-1, 4)
+        for line in normalized_lines:
+            x1, y1, x2, y2 = line.tolist()
+            found.append((int(x1), int(y1), int(x2), int(y2)))
     return found
 
 
-def _extract_lsd_segments(threshold: "np.ndarray", config: PipelineConfig, cv2: object) -> List[Tuple[int, int, int, int]]:
+def _extract_lsd_segments(threshold: "np.ndarray", config: PipelineConfig, cv2: object, np: object) -> List[Tuple[int, int, int, int]]:
     if not config.image.lsd_enabled:
         return []
     if not hasattr(cv2, "createLineSegmentDetector"):
@@ -326,7 +328,8 @@ def _extract_lsd_segments(threshold: "np.ndarray", config: PipelineConfig, cv2: 
     if detected is None:
         return []
     lines: List[Tuple[int, int, int, int]] = []
-    for segment in detected[:, 0]:
+    normalized_segments = np.asarray(detected).reshape(-1, 4)
+    for segment in normalized_segments:
         x1, y1, x2, y2 = segment.tolist()
         lines.append((int(round(x1)), int(round(y1)), int(round(x2)), int(round(y2))))
     return lines
@@ -378,7 +381,7 @@ def _load_image_segments(input_path: Path, config: PipelineConfig) -> List[Segme
 
     threshold = _preprocess_image(image, config, cv2)
     hough_lines = _extract_hough_segments(threshold, config, cv2, np)
-    lsd_lines = _extract_lsd_segments(threshold, config, cv2)
+    lsd_lines = _extract_lsd_segments(threshold, config, cv2, np)
     merged_lines = _deduplicate_raw_lines([*hough_lines, *lsd_lines], config)
     if not merged_lines:
         return []
