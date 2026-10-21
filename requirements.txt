@@ -1,0 +1,7 @@
+pandas
+openpyxl
+PyMuPDF
+pytesseract
+Pillow
+watchdog
+filelock
